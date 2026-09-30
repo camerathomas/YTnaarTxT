@@ -1,9 +1,10 @@
 # ============================================
 # YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
-#                en Nederlandse vertaling (één request per sectie)
+#                en Nederlandse vertaling (1 request via JSON)
 # ============================================
 
 import re
+import json
 from collections import Counter
 
 import streamlit as st
@@ -192,34 +193,22 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Vertaling (één request per sectie)
+# DEEL 6 — Vertaling (1 request via JSON)
 # ============================================
 
-SCHEIDING = " ||| "
-
-
-def bundel_zinnen(zinnen: list[str]) -> str:
-    """Bundel zinnen tot één tekst met scheidingstekens."""
-    return SCHEIDING.join(zinnen)
-
-
-def splits_vertaling(tekst: str, aantal: int) -> list[str]:
-    """Splits de vertaalde tekst terug in losse zinnen."""
-    delen = [d.strip() for d in tekst.split("|||")]
-    while len(delen) < aantal:
-        delen.append("")
-    return delen[:aantal]
-
-
 @st.cache_data(show_spinner=False)
-def vertaal_naar_nederlands(tekst: str) -> str:
-    """Vertaal één tekst naar het Nederlands."""
-    if not tekst.strip():
-        return ""
+def vertaal_json(data: dict) -> dict:
+    """Vertaal alle waarden in een dict in één request."""
+    if not data:
+        return {}
     try:
-        return GoogleTranslator(source="en", target="nl").translate(tekst)
+        json_tekst = json.dumps(data, ensure_ascii=False)
+        vertaald = GoogleTranslator(source="en", target="nl").translate(json_tekst)
+        return json.loads(vertaald)
+    except json.JSONDecodeError as e:
+        return {k: f"[JSON-parse mislukt: {e}]" for k in data}
     except Exception as e:
-        return f"[Vertaling mislukt: {e}]"
+        return {k: f"[Vertaling mislukt: {e}]" for k in data}
 
 
 # ============================================
@@ -282,33 +271,37 @@ if knop and url:
         kw = kernwoorden_tfidf(transcript, 15)
     st.table(kw)
 
-    # --- Kernzinnen ---
-    st.subheader("Kernzinnen")
-    st.caption("De meest centrale zinnen uit het transcript, in volgorde van belangrijkheid.")
+    # --- Kernzinnen en samenvatting berekenen (Engels) ---
     with st.spinner("Kernzinnen berekenen..."):
         kz = kernzinnen(transcript, 7)
 
-    with st.spinner("Kernzinnen vertalen..."):
-        gebundeld = bundel_zinnen(kz)
-        vertaald = vertaal_naar_nederlands(gebundeld)
-        kz_nl = splits_vertaling(vertaald, len(kz))
+    with st.spinner("Samenvatting maken..."):
+        samenvatting_en = " ".join(kernzinnen(transcript, 5))
 
-    for i, (en, nl) in enumerate(zip(kz, kz_nl), 1):
+    # --- Alles in één request vertalen ---
+    with st.spinner("Vertalen..."):
+        te_vertalen = {
+            "kernzinnen": kz,
+            "samenvatting": samenvatting_en,
+        }
+        vertaald = vertaal_json(te_vertalen)
+        kz_nl = vertaald.get("kernzinnen", [])
+        samenvatting_nl = vertaald.get("samenvatting", "")
+
+    # --- Kernzinnen tonen ---
+    st.subheader("Kernzinnen")
+    st.caption("De meest centrale zinnen uit het transcript, in volgorde van belangrijkheid.")
+    for i, en in enumerate(kz, 1):
+        nl = kz_nl[i-1] if i-1 < len(kz_nl) else "[geen vertaling]"
         with st.expander(f"Kernzin {i}"):
             st.write("**Engels:**")
             st.write(en)
             st.write("**Nederlands:**")
             st.write(nl)
 
-    # --- Samenvatting ---
+    # --- Samenvatting tonen ---
     st.subheader("Samenvatting")
     st.caption("Extractieve samenvatting — de meest centrale zinnen, in het Nederlands.")
-    with st.spinner("Samenvatting maken..."):
-        samenvatting_en = " ".join(kernzinnen(transcript, 5))
-
-    with st.spinner("Samenvatting vertalen..."):
-        samenvatting_nl = vertaal_naar_nederlands(samenvatting_en)
-
     st.write("**Nederlands:**")
     st.write(samenvatting_nl)
     with st.expander("Origineel (Engels)"):
