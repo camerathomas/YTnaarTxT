@@ -5,6 +5,7 @@
 # ============================================
 
 import re
+import sys
 import json
 import subprocess
 from collections import Counter
@@ -60,7 +61,7 @@ def haal_video_data(video_id: str):
     """Haal metadata + automatische ondertitels op."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     commando = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",
         "--skip-download",
         "--write-auto-subs",
         "--sub-lang", "en",
@@ -83,7 +84,7 @@ def haal_transcript(video_id: str):
     """Haal het transcript op als platte tekst."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     commando = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",
         "--skip-download",
         "--write-auto-subs",
         "--sub-lang", "en",
@@ -116,11 +117,11 @@ STOPWOORDEN = {
     "not", "are", "was", "were", "will", "would", "could", "should",
     "what", "when", "where", "which", "who", "how", "why", "from",
     "they", "them", "their", "there", "then", "than", "just", "like",
-    "get", "got", "going", "going", "know", "think", "want", "need",
+    "get", "got", "going", "know", "think", "want", "need",
     "see", "look", "make", "made", "take", "took", "come", "came",
     "about", "into", "over", "also", "some", "such", "only", "very",
     "more", "most", "much", "many", "can", "cant", "dont", "doesnt",
-    "its", "it's", "im", "i'm", "youre", "you're", "we're", "theyre",
+    "its", "im", "youre", "were", "theyre",
 }
 
 
