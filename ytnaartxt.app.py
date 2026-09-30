@@ -1,7 +1,5 @@
 # ============================================
-# YTnaarTxT — eerste versie (met youtube-transcript-api)
-# Doel: invoerveld, detectie, transcript ophalen,
-#       kleine analyse (woorden, top-10)
+# YTnaarTxT — met kernwoorden, kernzinnen en samenvatting
 # ============================================
 
 import re
@@ -10,17 +8,37 @@ from collections import Counter
 import streamlit as st
 from youtube_transcript_api import YouTubeTranscriptApi
 
+# NLP
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.text_rank import TextRankSummarizer
+import nltk
+
+
+# ============================================
+# Eenmalige NLTK-setup
+# ============================================
+
+@st.cache_resource
+def setup_nltk():
+    """Download eenmalig de NLTK-data die sumy nodig heeft."""
+    for pakket in ["punkt", "punkt_tab"]:
+        try:
+            nltk.data.find(f"tokenizers/{pakket}")
+        except LookupError:
+            nltk.download(pakket, quiet=True)
+    return True
+
 
 # ============================================
 # DEEL 1 — URL-detectie
 # ============================================
 
 def detecteer_type(url: str) -> str:
-    """Bepaal wat voor YouTube-URL dit is."""
     url = url.strip().lower()
     if not url:
         return "leeg"
-
     if "/playlist" in url or ("list=" in url and "watch?v=" not in url):
         return "playlist"
     if any(p in url for p in ["/channel/", "/@", "/c/", "/user/"]):
@@ -35,7 +53,6 @@ def detecteer_type(url: str) -> str:
 
 
 def haal_video_id(url: str):
-    """Haal de video-ID uit een YouTube-URL."""
     patronen = [
         r"v=([a-zA-Z0-9_-]{11})",
         r"youtu\.be/([a-zA-Z0-9_-]{11})",
@@ -51,11 +68,10 @@ def haal_video_id(url: str):
 
 
 # ============================================
-# DEEL 2 — Transcript ophalen via youtube-transcript-api
+# DEEL 2 — Transcript ophalen
 # ============================================
 
 def haal_transcript(video_id: str):
-    """Haal het transcript op als platte tekst."""
     try:
         ytt_api = YouTubeTranscriptApi()
         fetched = ytt_api.fetch(video_id, languages=["en", "en-US", "en-GB"])
@@ -68,7 +84,7 @@ def haal_transcript(video_id: str):
 
 
 # ============================================
-# DEEL 3 — Kleine analyse
+# DEEL 3 — Basisanalyse
 # ============================================
 
 STOPWOORDEN = {
@@ -95,22 +111,71 @@ def top_woorden(tekst: str, n: int = 10):
 
 
 # ============================================
-# DEEL 4 — Streamlit UI
+# DEEL 4 — Kernwoorden via TF-IDF
+# ============================================
+
+def kernwoorden_tfidf(tekst: str, n: int = 15):
+    """Bereken de top-N kernwoorden met TF-IDF."""
+    # Splits de tekst in "documenten" — hier: chunks van ~5 zinnen
+    zinnen = re.split(r"(?<=[.!?])\s+", tekst)
+    chunks = []
+    for i in range(0, len(zinnen), 5):
+        chunk = " ".join(zinnen[i:i+5]).strip()
+        if len(chunk.split()) >= 10:
+            chunks.append(chunk)
+    
+    if len(chunks) < 2:
+        # Te weinig tekst voor TF-IDF, val terug op frequentie
+        return top_woorden(tekst, n)
+    
+    vec = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),   # ook bigrams
+        min_df=1,
+        sublinear_tf=True,
+    )
+    X = vec.fit_transform(chunks)
+    gemiddeld = X.mean(axis=0).A1
+    termen = vec.get_feature_names_out()
+    top_idx = gemiddeld.argsort()[::-1][:n]
+    
+    resultaat = []
+    for i in top_idx:
+        resultaat.append((termen[i], round(float(gemiddeld[i]), 3)))
+    return resultaat
+
+
+# ============================================
+# DEEL 5 — Kernzinnen en samenvatting via TextRank
+# ============================================
+
+def kernzinnen(tekst: str, aantal: int = 5):
+    """Haal de top-N meest centrale zinnen op via TextRank."""
+    parser = PlaintextParser.from_string(tekst, Tokenizer("english"))
+    summarizer = TextRankSummarizer()
+    zinnen = summarizer(parser.document, aantal)
+    return [str(z).strip() for z in zinnen]
+
+
+# ============================================
+# DEEL 6 — Streamlit UI
 # ============================================
 
 st.set_page_config(page_title="YTnaarTxT", layout="wide")
 st.title("YTnaarTxT")
-st.caption("Analyseer een YouTube-video — transcript en kernwoorden.")
+st.caption("Analyseer een YouTube-video — transcript, kernwoorden, kernzinnen en samenvatting.")
 
 url = st.text_input("Plak een YouTube-link:", placeholder="https://www.youtube.com/watch?v=...")
 knop = st.button("Analyseer")
 
 
 # ============================================
-# DEEL 5 — Hoofdlogica
+# DEEL 7 — Hoofdlogica
 # ============================================
 
 if knop and url:
+    setup_nltk()
+
     type_ = detecteer_type(url)
     st.write(f"**Gedetecteerd type:** `{type_}`")
 
@@ -132,13 +197,37 @@ if knop and url:
         st.error(f"Ophalen mislukt: {fout}")
         st.stop()
 
+    # --- Transcript ---
     st.subheader("Transcript")
-    st.text_area("Volledige tekst", transcript, height=300)
+    st.text_area("Volledige tekst", transcript, height=200)
 
-    st.subheader("Kleine analyse")
+    # --- Basisanalyse ---
+    st.subheader("Basisanalyse")
     col1, col2 = st.columns(2)
     col1.metric("Woorden", f"{woordaantal(transcript):,}")
     col2.metric("Unieke top-10", len(top_woorden(transcript, 10)))
 
-    st.write("**Top-10 woorden:**")
+    st.write("**Top-10 woorden (ruwe frequentie):**")
     st.table(top_woorden(transcript, 10))
+
+    # --- Kernwoorden via TF-IDF ---
+    st.subheader("Kernwoorden (TF-IDF)")
+    st.caption("Woorden en woordcombinaties die kenmerkend zijn voor deze tekst.")
+    with st.spinner("Kernwoorden berekenen..."):
+        kw = kernwoorden_tfidf(transcript, 15)
+    st.table(kw)
+
+    # --- Kernzinnen ---
+    st.subheader("Kernzinnen")
+    st.caption("De meest centrale zinnen uit het transcript, in volgorde van belangrijkheid.")
+    with st.spinner("Kernzinnen berekenen..."):
+        kz = kernzinnen(transcript, 7)
+    for i, zin in enumerate(kz, 1):
+        st.write(f"**{i}.** {zin}")
+
+    # --- Samenvatting ---
+    st.subheader("Samenvatting")
+    st.caption("Extractieve samenvatting — letterlijke zinnen uit het transcript.")
+    with st.spinner("Samenvatting maken..."):
+        samenvatting = kernzinnen(transcript, 5)
+    st.write(" ".join(samenvatting))
