@@ -1,5 +1,6 @@
 # ============================================
-# YTnaarTxT — met kernwoorden, kernzinnen en samenvatting
+# YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
+#                en Nederlandse vertaling
 # ============================================
 
 import re
@@ -15,6 +16,9 @@ from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.text_rank import TextRankSummarizer
 import nltk
 
+# Vertaling
+from deep_translator import GoogleTranslator
+
 
 # ============================================
 # Eenmalige NLTK-setup
@@ -22,7 +26,6 @@ import nltk
 
 @st.cache_resource
 def setup_nltk():
-    """Download eenmalig de NLTK-data die sumy nodig heeft."""
     for pakket in ["punkt", "punkt_tab"]:
         try:
             nltk.data.find(f"tokenizers/{pakket}")
@@ -84,24 +87,50 @@ def haal_transcript(video_id: str):
 
 
 # ============================================
-# DEEL 3 — Basisanalyse
+# DEEL 3 — Stopwoorden en inhoudswoorden
 # ============================================
 
 STOPWOORDEN = {
+    # Klassieke stopwoorden
     "the", "and", "you", "that", "this", "with", "for", "have", "but",
     "not", "are", "was", "were", "will", "would", "could", "should",
     "what", "when", "where", "which", "who", "how", "why", "from",
-    "they", "them", "their", "there", "then", "than", "just", "like",
+    "they", "them", "their", "there", "then", "than", "just",
     "get", "got", "going", "know", "think", "want", "need",
     "see", "look", "make", "made", "take", "took", "come", "came",
-    "about", "into", "over", "also", "some", "such", "only", "very",
+    "about", "into", "over", "also", "some", "such", "only",
     "more", "most", "much", "many", "can", "cant", "dont", "doesnt",
-    "its", "im", "youre", "were", "theyre",
+    "its", "im", "youre", "were", "theyre", "has", "had", "been",
+    "being", "does", "did", "doing", "our", "your", "his", "her",
+    "him", "she", "he", "we", "us", "me", "my", "mine", "yours",
+    # Discourse markers (nu echt filteren)
+    "now", "well", "okay", "right", "yeah", "yes",
+    "actually", "basically", "literally", "really", "quite",
+    "still", "even", "ever", "never", "always", "often", "sometimes",
+    "here", "before", "after", "while", "during", "between",
+    "through", "against", "because", "since", "until", "unless",
+    "though", "although", "however", "therefore", "thus", "hence",
+    "first", "second", "third", "next", "last", "finally",
+    "another", "lot", "lots", "one", "two", "three",
+    "four", "five", "six", "seven", "eight", "nine", "ten",
+    # Extra functiewoorden die vaak opduiken
+    "let", "lets", "say", "said", "says", "going", "go", "went",
+    "way", "thing", "things", "time", "times", "day", "days",
+    "year", "years", "month", "months", "week", "weeks",
+    "guy", "guys", "people", "person", "man", "woman",
+    "good", "bad", "big", "small", "new", "old", "long", "short",
+    "much", "little", "few", "every", "each", "both", "all", "any",
 }
 
 
 def woordaantal(tekst: str) -> int:
     return len(tekst.split())
+
+
+def is_inhoudswoord(term: str) -> bool:
+    """Check of een term (of bigram) alleen inhoudswoorden bevat."""
+    woorden = term.lower().split()
+    return all(w not in STOPWOORDEN and len(w) >= 3 for w in woorden)
 
 
 def top_woorden(tekst: str, n: int = 10):
@@ -115,42 +144,45 @@ def top_woorden(tekst: str, n: int = 10):
 # ============================================
 
 def kernwoorden_tfidf(tekst: str, n: int = 15):
-    """Bereken de top-N kernwoorden met TF-IDF."""
-    # Splits de tekst in "documenten" — hier: chunks van ~5 zinnen
+    """Bereken de top-N kernwoorden met TF-IDF, gefilterd op inhoudswoorden."""
     zinnen = re.split(r"(?<=[.!?])\s+", tekst)
     chunks = []
     for i in range(0, len(zinnen), 5):
         chunk = " ".join(zinnen[i:i+5]).strip()
         if len(chunk.split()) >= 10:
             chunks.append(chunk)
-    
+
     if len(chunks) < 2:
-        # Te weinig tekst voor TF-IDF, val terug op frequentie
         return top_woorden(tekst, n)
-    
+
     vec = TfidfVectorizer(
         stop_words="english",
-        ngram_range=(1, 2),   # ook bigrams
+        ngram_range=(1, 2),
         min_df=1,
         sublinear_tf=True,
     )
     X = vec.fit_transform(chunks)
     gemiddeld = X.mean(axis=0).A1
     termen = vec.get_feature_names_out()
-    top_idx = gemiddeld.argsort()[::-1][:n]
-    
+
+    top_idx = gemiddeld.argsort()[::-1]
+
     resultaat = []
     for i in top_idx:
-        resultaat.append((termen[i], round(float(gemiddeld[i]), 3)))
+        term = termen[i]
+        if is_inhoudswoord(term):
+            resultaat.append((term, round(float(gemiddeld[i]), 3)))
+        if len(resultaat) >= n:
+            break
+
     return resultaat
 
 
 # ============================================
-# DEEL 5 — Kernzinnen en samenvatting via TextRank
+# DEEL 5 — Kernzinnen en samenvatting
 # ============================================
 
 def kernzinnen(tekst: str, aantal: int = 5):
-    """Haal de top-N meest centrale zinnen op via TextRank."""
     parser = PlaintextParser.from_string(tekst, Tokenizer("english"))
     summarizer = TextRankSummarizer()
     zinnen = summarizer(parser.document, aantal)
@@ -158,7 +190,38 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Streamlit UI
+# DEEL 6 — Vertaling
+# ============================================
+
+@st.cache_data(show_spinner=False)
+def vertaal_naar_nederlands(tekst: str) -> str:
+    """Vertaal tekst naar het Nederlands via Google Translate."""
+    if not tekst.strip():
+        return ""
+    try:
+        # Google Translate limiet ~5000 tekens
+        if len(tekst) <= 4500:
+            return GoogleTranslator(source="en", target="nl").translate(tekst)
+        # Splits in stukken van maximaal 4500 tekens
+        stukken = []
+        huidig = ""
+        for zin in re.split(r"(?<=[.!?])\s+", tekst):
+            if len(huidig) + len(zin) + 2 > 4500:
+                if huidig:
+                    stukken.append(huidig)
+                huidig = zin
+            else:
+                huidig += " " + zin if huidig else zin
+        if huidig:
+            stukken.append(huidig)
+        vertaald = [GoogleTranslator(source="en", target="nl").translate(s) for s in stukken]
+        return " ".join(vertaald)
+    except Exception as e:
+        return f"[Vertaling mislukt: {e}]"
+
+
+# ============================================
+# DEEL 7 — Streamlit UI
 # ============================================
 
 st.set_page_config(page_title="YTnaarTxT", layout="wide")
@@ -170,7 +233,7 @@ knop = st.button("Analyseer")
 
 
 # ============================================
-# DEEL 7 — Hoofdlogica
+# DEEL 8 — Hoofdlogica
 # ============================================
 
 if knop and url:
@@ -211,8 +274,8 @@ if knop and url:
     st.table(top_woorden(transcript, 10))
 
     # --- Kernwoorden via TF-IDF ---
-    st.subheader("Kernwoorden (TF-IDF)")
-    st.caption("Woorden en woordcombinaties die kenmerkend zijn voor deze tekst.")
+    st.subheader("Kernwoorden")
+    st.caption("Inhoudswoorden en -combinaties die kenmerkend zijn voor deze tekst.")
     with st.spinner("Kernwoorden berekenen..."):
         kw = kernwoorden_tfidf(transcript, 15)
     st.table(kw)
@@ -222,12 +285,26 @@ if knop and url:
     st.caption("De meest centrale zinnen uit het transcript, in volgorde van belangrijkheid.")
     with st.spinner("Kernzinnen berekenen..."):
         kz = kernzinnen(transcript, 7)
-    for i, zin in enumerate(kz, 1):
-        st.write(f"**{i}.** {zin}")
+
+    with st.spinner("Kernzinnen vertalen..."):
+        kz_nl = [vertaal_naar_nederlands(z) for z in kz]
+
+    for i, (en, nl) in enumerate(zip(kz, kz_nl), 1):
+        with st.expander(f"Kernzin {i}"):
+            st.write("**Engels:**")
+            st.write(en)
+            st.write("**Nederlands:**")
+            st.write(nl)
 
     # --- Samenvatting ---
     st.subheader("Samenvatting")
-    st.caption("Extractieve samenvatting — letterlijke zinnen uit het transcript.")
+    st.caption("Extractieve samenvatting — letterlijke zinnen uit het transcript, in het Nederlands.")
     with st.spinner("Samenvatting maken..."):
-        samenvatting = kernzinnen(transcript, 5)
-    st.write(" ".join(samenvatting))
+        samenvatting_en = kernzinnen(transcript, 5)
+    with st.spinner("Samenvatting vertalen..."):
+        samenvatting_nl = vertaal_naar_nederlands(" ".join(samenvatting_en))
+
+    st.write("**Nederlands:**")
+    st.write(samenvatting_nl)
+    with st.expander("Origineel (Engels)"):
+        st.write(" ".join(samenvatting_en))
