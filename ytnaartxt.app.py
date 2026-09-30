@@ -1,6 +1,6 @@
 # ============================================
 # YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
-#                en Nederlandse vertaling (batch)
+#                en Nederlandse vertaling (één request per sectie)
 # ============================================
 
 import re
@@ -192,19 +192,34 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Vertaling (batch)
+# DEEL 6 — Vertaling (één request per sectie)
 # ============================================
 
+SCHEIDING = " ||| "
+
+
+def bundel_zinnen(zinnen: list[str]) -> str:
+    """Bundel zinnen tot één tekst met scheidingstekens."""
+    return SCHEIDING.join(zinnen)
+
+
+def splits_vertaling(tekst: str, aantal: int) -> list[str]:
+    """Splits de vertaalde tekst terug in losse zinnen."""
+    delen = [d.strip() for d in tekst.split("|||")]
+    while len(delen) < aantal:
+        delen.append("")
+    return delen[:aantal]
+
+
 @st.cache_data(show_spinner=False)
-def vertaal_batch(teksten: list[str]) -> list[str]:
-    """Vertaal een lijst teksten in één keer naar het Nederlands."""
-    if not teksten:
-        return []
+def vertaal_naar_nederlands(tekst: str) -> str:
+    """Vertaal één tekst naar het Nederlands."""
+    if not tekst.strip():
+        return ""
     try:
-        vertaler = GoogleTranslator(source="en", target="nl")
-        return vertaler.translate_batch(teksten)
+        return GoogleTranslator(source="en", target="nl").translate(tekst)
     except Exception as e:
-        return [f"[Vertaling mislukt: {e}]"] * len(teksten)
+        return f"[Vertaling mislukt: {e}]"
 
 
 # ============================================
@@ -274,7 +289,9 @@ if knop and url:
         kz = kernzinnen(transcript, 7)
 
     with st.spinner("Kernzinnen vertalen..."):
-        kz_nl = vertaal_batch(kz)
+        gebundeld = bundel_zinnen(kz)
+        vertaald = vertaal_naar_nederlands(gebundeld)
+        kz_nl = splits_vertaling(vertaald, len(kz))
 
     for i, (en, nl) in enumerate(zip(kz, kz_nl), 1):
         with st.expander(f"Kernzin {i}"):
@@ -290,7 +307,7 @@ if knop and url:
         samenvatting_en = " ".join(kernzinnen(transcript, 5))
 
     with st.spinner("Samenvatting vertalen..."):
-        samenvatting_nl = vertaal_batch([samenvatting_en])[0]
+        samenvatting_nl = vertaal_naar_nederlands(samenvatting_en)
 
     st.write("**Nederlands:**")
     st.write(samenvatting_nl)
