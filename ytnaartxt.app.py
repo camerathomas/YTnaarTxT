@@ -1,17 +1,14 @@
 # ============================================
-# YTnaarTxT — eerste versie
+# YTnaarTxT — eerste versie (met youtube-transcript-api)
 # Doel: invoerveld, detectie, transcript ophalen,
-#       kleine analyse (woorden, top-10, like-ratio)
+#       kleine analyse (woorden, top-10)
 # ============================================
 
 import re
-import sys
-import json
-import subprocess
 from collections import Counter
-from datetime import datetime
 
 import streamlit as st
+from youtube_transcript_api import YouTubeTranscriptApi
 
 
 # ============================================
@@ -54,78 +51,20 @@ def haal_video_id(url: str):
 
 
 # ============================================
-# DEEL 2 — Video ophalen via yt-dlp
+# DEEL 2 — Transcript ophalen via youtube-transcript-api
 # ============================================
-
-def haal_video_data(video_id: str):
-    """Haal metadata + automatische ondertitels op."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    commando = [
-        sys.executable, "-m", "yt_dlp",
-        "--skip-download",
-        "--write-auto-subs",
-        "--sub-lang", "en",
-        "--sub-format", "vtt",
-        "--dump-json",
-        "-o", "-",
-        url,
-    ]
-    try:
-        result = subprocess.run(commando, capture_output=True, text=True, timeout=120)
-    except Exception as e:
-        return None, f"Subprocess-fout: {e}"
-
-    if result.returncode != 0:
-        return None, f"yt-dlp fout (code {result.returncode}): {result.stderr[:500]}"
-
-    regels = [r for r in result.stdout.splitlines() if r.strip()]
-    if not regels:
-        return None, "yt-dlp gaf geen output. Stderr: " + (result.stderr[:500] or "(leeg)")
-
-    try:
-        data = json.loads(regels[0])
-    except json.JSONDecodeError as e:
-        return None, f"Kon JSON niet lezen: {e}. Eerste regel: {regels[0][:300]}"
-
-    return data, None
-
 
 def haal_transcript(video_id: str):
     """Haal het transcript op als platte tekst."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    commando = [
-        sys.executable, "-m", "yt_dlp",
-        "--skip-download",
-        "--write-auto-subs",
-        "--sub-lang", "en",
-        "--sub-format", "vtt",
-        "--output", "-",
-        url,
-    ]
     try:
-        result = subprocess.run(commando, capture_output=True, text=True, timeout=120)
+        ytt_api = YouTubeTranscriptApi()
+        fetched = ytt_api.fetch(video_id, languages=["en", "en-US", "en-GB"])
+        regels = [snippet.text for snippet in fetched]
+        if not regels:
+            return None, "Transcript was leeg."
+        return " ".join(regels), None
     except Exception as e:
-        return None, f"Subprocess-fout: {e}"
-
-    if result.returncode != 0:
-        return None, f"yt-dlp fout (code {result.returncode}): {result.stderr[:500]}"
-
-    vtt = result.stdout
-    if not vtt.strip():
-        return None, "Geen transcript ontvangen. Stderr: " + (result.stderr[:500] or "(leeg)")
-
-    regels = []
-    for regel in vtt.splitlines():
-        if "-->" in regel or regel.strip().startswith(("WEBVTT", "Kind:", "Language:")):
-            continue
-        schoon = re.sub(r"<[^>]+>", "", regel).strip()
-        if schoon and schoon not in regels[-3:]:
-            regels.append(schoon)
-
-    if not regels:
-        return None, "Transcript was leeg na opschonen."
-
-    return " ".join(regels), None
+        return None, f"{type(e).__name__}: {e}"
 
 
 # ============================================
@@ -149,42 +88,10 @@ def woordaantal(tekst: str) -> int:
     return len(tekst.split())
 
 
-def woorden_per_minuut(tekst: str, duur_sec: float) -> float:
-    if not duur_sec:
-        return 0.0
-    return round(woordaantal(tekst) / (duur_sec / 60), 1)
-
-
 def top_woorden(tekst: str, n: int = 10):
     woorden = re.findall(r"\b[a-zA-Z]{3,}\b", tekst.lower())
     gefilterd = [w for w in woorden if w not in STOPWOORDEN]
     return Counter(gefilterd).most_common(n)
-
-
-def like_ratio(likes: int, views: int) -> float:
-    return round(likes / views, 4) if views else 0.0
-
-
-def views_per_dag(views: int, uploaddatum: str) -> float:
-    try:
-        dagen = (datetime.now() - datetime.strptime(uploaddatum, "%Y%m%d")).days or 1
-        return round(views / dagen, 1)
-    except Exception:
-        return 0.0
-
-
-BENCHMARK_LIKE_RATIO = 0.027  # platformmediaan
-
-
-def beoordeel(waarde: float, benchmark: float) -> str:
-    if not benchmark:
-        return "geen referentie"
-    ratio = waarde / benchmark
-    if ratio >= 1.5:
-        return f"opvallend goed ({ratio:.2f}×)"
-    if ratio <= 0.7:
-        return f"opvallend zwak ({ratio:.2f}×)"
-    return f"gemiddeld ({ratio:.2f}×)"
 
 
 # ============================================
@@ -193,7 +100,7 @@ def beoordeel(waarde: float, benchmark: float) -> str:
 
 st.set_page_config(page_title="YTnaarTxT", layout="wide")
 st.title("YTnaarTxT")
-st.caption("Analyseer een YouTube-video — transcript, kernwoorden en prestatiegegevens.")
+st.caption("Analyseer een YouTube-video — transcript en kernwoorden.")
 
 url = st.text_input("Plak een YouTube-link:", placeholder="https://www.youtube.com/watch?v=...")
 knop = st.button("Analyseer")
@@ -207,7 +114,7 @@ if knop and url:
     type_ = detecteer_type(url)
     st.write(f"**Gedetecteerd type:** `{type_}`")
 
-    if type_ != "video":
+    if type_ not in ("video", "video_shorts", "video_live"):
         st.warning("Deze versie ondersteunt alleen losse video's. Playlists en kanalen komen later.")
         st.stop()
 
@@ -218,52 +125,20 @@ if knop and url:
 
     st.write(f"**Video-ID:** `{video_id}`")
 
-    with st.spinner("Video ophalen..."):
-        data, fout = haal_video_data(video_id)
-
-    if fout or not data:
-        st.error(f"Ophalen mislukt: {fout}")
-        st.stop()
-
-    # Metadata tonen
-    st.subheader("Over deze video")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Titel", data.get("title", "?"))
-    col2.metric("Kanaal", data.get("channel", "?"))
-    col3.metric("Duur (sec)", data.get("duration", "?"))
-    col4.metric("Uploaddatum", data.get("upload_date", "?"))
-
-    views = data.get("view_count", 0)
-    likes = data.get("like_count", 0)
-    comments = data.get("comment_count", 0)
-
-    st.subheader("Statistieken")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Views", f"{views:,}")
-    col2.metric("Likes", f"{likes:,}")
-    col3.metric("Comments", f"{comments:,}")
-    col4.metric("Like-ratio", f"{like_ratio(likes, views):.4f}")
-
-    st.write(f"**Beoordeling like-ratio:** {beoordeel(like_ratio(likes, views), BENCHMARK_LIKE_RATIO)}")
-    st.write(f"**Views per dag:** {views_per_dag(views, data.get('upload_date', '')):,}")
-
-    # Transcript ophalen
     with st.spinner("Transcript ophalen..."):
         transcript, fout = haal_transcript(video_id)
 
     if fout or not transcript:
-        st.warning(f"Geen transcript beschikbaar: {fout}")
+        st.error(f"Ophalen mislukt: {fout}")
         st.stop()
 
     st.subheader("Transcript")
-    st.text_area("Volledige tekst", transcript, height=200)
+    st.text_area("Volledige tekst", transcript, height=300)
 
-    # Analyse
     st.subheader("Kleine analyse")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     col1.metric("Woorden", f"{woordaantal(transcript):,}")
-    col2.metric("Woorden/minuut", woorden_per_minuut(transcript, data.get("duration", 0)))
-    col3.metric("Unieke top-10", len(top_woorden(transcript, 10)))
+    col2.metric("Unieke top-10", len(top_woorden(transcript, 10)))
 
     st.write("**Top-10 woorden:**")
     st.table(top_woorden(transcript, 10))
