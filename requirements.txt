@@ -1,2 +1,5 @@
 streamlit
 youtube-transcript-api
+scikit-learn
+sumy
+nltk
