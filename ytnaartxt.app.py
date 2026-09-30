@@ -71,13 +71,23 @@ def haal_video_data(video_id: str):
         url,
     ]
     try:
-        result = subprocess.run(commando, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return None, result.stderr
-        data = json.loads(result.stdout.splitlines()[0])
-        return data, None
+        result = subprocess.run(commando, capture_output=True, text=True, timeout=120)
     except Exception as e:
-        return None, str(e)
+        return None, f"Subprocess-fout: {e}"
+
+    if result.returncode != 0:
+        return None, f"yt-dlp fout (code {result.returncode}): {result.stderr[:500]}"
+
+    regels = [r for r in result.stdout.splitlines() if r.strip()]
+    if not regels:
+        return None, "yt-dlp gaf geen output. Stderr: " + (result.stderr[:500] or "(leeg)")
+
+    try:
+        data = json.loads(regels[0])
+    except json.JSONDecodeError as e:
+        return None, f"Kon JSON niet lezen: {e}. Eerste regel: {regels[0][:300]}"
+
+    return data, None
 
 
 def haal_transcript(video_id: str):
@@ -93,19 +103,29 @@ def haal_transcript(video_id: str):
         url,
     ]
     try:
-        result = subprocess.run(commando, capture_output=True, text=True, timeout=60)
-        vtt = result.stdout
-        # Verwijder tijdstempels en metadata uit VTT
-        regels = []
-        for regel in vtt.splitlines():
-            if "-->" in regel or regel.strip().startswith(("WEBVTT", "Kind:", "Language:")):
-                continue
-            schoon = re.sub(r"<[^>]+>", "", regel).strip()
-            if schoon and schoon not in regels[-3:]:
-                regels.append(schoon)
-        return " ".join(regels), None
+        result = subprocess.run(commando, capture_output=True, text=True, timeout=120)
     except Exception as e:
-        return None, str(e)
+        return None, f"Subprocess-fout: {e}"
+
+    if result.returncode != 0:
+        return None, f"yt-dlp fout (code {result.returncode}): {result.stderr[:500]}"
+
+    vtt = result.stdout
+    if not vtt.strip():
+        return None, "Geen transcript ontvangen. Stderr: " + (result.stderr[:500] or "(leeg)")
+
+    regels = []
+    for regel in vtt.splitlines():
+        if "-->" in regel or regel.strip().startswith(("WEBVTT", "Kind:", "Language:")):
+            continue
+        schoon = re.sub(r"<[^>]+>", "", regel).strip()
+        if schoon and schoon not in regels[-3:]:
+            regels.append(schoon)
+
+    if not regels:
+        return None, "Transcript was leeg na opschonen."
+
+    return " ".join(regels), None
 
 
 # ============================================
@@ -232,7 +252,7 @@ if knop and url:
         transcript, fout = haal_transcript(video_id)
 
     if fout or not transcript:
-        st.warning("Geen transcript beschikbaar voor deze video.")
+        st.warning(f"Geen transcript beschikbaar: {fout}")
         st.stop()
 
     st.subheader("Transcript")
