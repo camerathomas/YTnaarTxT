@@ -1,10 +1,9 @@
 # ============================================
 # YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
-#                en Nederlandse vertaling (1 request via JSON)
+#                en Nederlandse vertaling (1 request via bundel)
 # ============================================
 
 import re
-import json
 from collections import Counter
 
 import streamlit as st
@@ -193,22 +192,30 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Vertaling (1 request via JSON)
+# DEEL 6 — Vertaling (1 request via bundel)
 # ============================================
 
+SCHEIDING = "\n---\n"
+
+
 @st.cache_data(show_spinner=False)
-def vertaal_json(data: dict) -> dict:
-    """Vertaal alle waarden in een dict in één request."""
-    if not data:
-        return {}
+def vertaal_bundel(teksten: list[str]) -> list[str]:
+    """Vertaal een lijst teksten in één request, gescheiden door een markering."""
+    if not teksten:
+        return []
     try:
-        json_tekst = json.dumps(data, ensure_ascii=False)
-        vertaald = GoogleTranslator(source="en", target="nl").translate(json_tekst)
-        return json.loads(vertaald)
-    except json.JSONDecodeError as e:
-        return {k: f"[JSON-parse mislukt: {e}]" for k in data}
+        gebundeld = SCHEIDING.join(teksten)
+        vertaald = GoogleTranslator(source="en", target="nl").translate(gebundeld)
+        # Splits op '---' — dat is wat overblijft na vertaling
+        delen = [d.strip() for d in vertaald.split("---")]
+        # Verwijder eventuele lege delen aan begin/eind
+        delen = [d for d in delen if d]
+        # Zorg dat we evenveel delen hebben als input
+        while len(delen) < len(teksten):
+            delen.append("")
+        return delen[:len(teksten)]
     except Exception as e:
-        return {k: f"[Vertaling mislukt: {e}]" for k in data}
+        return [f"[Vertaling mislukt: {e}]"] * len(teksten)
 
 
 # ============================================
@@ -279,14 +286,14 @@ if knop and url:
         samenvatting_en = " ".join(kernzinnen(transcript, 5))
 
     # --- Alles in één request vertalen ---
+    # Bundel: 7 kernzinnen + 1 samenvatting = 8 teksten
+    alles_en = kz + [samenvatting_en]
+
     with st.spinner("Vertalen..."):
-        te_vertalen = {
-            "kernzinnen": kz,
-            "samenvatting": samenvatting_en,
-        }
-        vertaald = vertaal_json(te_vertalen)
-        kz_nl = vertaald.get("kernzinnen", [])
-        samenvatting_nl = vertaald.get("samenvatting", "")
+        alles_nl = vertaal_bundel(alles_en)
+
+    kz_nl = alles_nl[:len(kz)]
+    samenvatting_nl = alles_nl[-1] if len(alles_nl) > len(kz) else ""
 
     # --- Kernzinnen tonen ---
     st.subheader("Kernzinnen")
