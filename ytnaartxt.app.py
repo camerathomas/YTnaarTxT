@@ -1,6 +1,6 @@
 # ============================================
 # YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
-#                en Nederlandse vertaling (1 request via bundel)
+#                en Nederlandse vertaling via Argos (offline)
 # ============================================
 
 import re
@@ -16,8 +16,9 @@ from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.text_rank import TextRankSummarizer
 import nltk
 
-# Vertaling
-from deep_translator import GoogleTranslator
+# Vertaling (offline)
+import argostranslate.package
+import argostranslate.translate
 
 
 # ============================================
@@ -32,6 +33,28 @@ def setup_nltk():
         except LookupError:
             nltk.download(pakket, quiet=True)
     return True
+
+
+# ============================================
+# Eenmalige Argos-setup
+# ============================================
+
+@st.cache_resource
+def setup_argos():
+    """Download eenmalig het en→nl taalpakket (~68 MB)."""
+    try:
+        argostranslate.package.update_package_index()
+        beschikbaar = argostranslate.package.get_available_packages()
+        pakket = next(
+            (p for p in beschikbaar if p.from_code == "en" and p.to_code == "nl"),
+            None,
+        )
+        if pakket is None:
+            return False, "Geen en→nl pakket gevonden."
+        argostranslate.package.install_from_path(pakket.download())
+        return True, None
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 # ============================================
@@ -192,30 +215,21 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Vertaling (1 request via bundel)
+# DEEL 6 — Vertaling (offline via Argos)
 # ============================================
-
-SCHEIDING = "\n---\n"
-
 
 @st.cache_data(show_spinner=False)
 def vertaal_bundel(teksten: list[str]) -> list[str]:
-    """Vertaal een lijst teksten in één request, gescheiden door een markering."""
+    """Vertaal een lijst teksten één voor één via Argos (offline)."""
     if not teksten:
         return []
-    try:
-        gebundeld = SCHEIDING.join(teksten)
-        vertaald = GoogleTranslator(source="en", target="nl").translate(gebundeld)
-        # Splits op '---' — dat is wat overblijft na vertaling
-        delen = [d.strip() for d in vertaald.split("---")]
-        # Verwijder eventuele lege delen aan begin/eind
-        delen = [d for d in delen if d]
-        # Zorg dat we evenveel delen hebben als input
-        while len(delen) < len(teksten):
-            delen.append("")
-        return delen[:len(teksten)]
-    except Exception as e:
-        return [f"[Vertaling mislukt: {e}]"] * len(teksten)
+    resultaat = []
+    for t in teksten:
+        try:
+            resultaat.append(argostranslate.translate.translate(t, "en", "nl"))
+        except Exception as e:
+            resultaat.append(f"[Vertaling mislukt: {e}]")
+    return resultaat
 
 
 # ============================================
@@ -236,6 +250,15 @@ knop = st.button("Analyseer")
 
 if knop and url:
     setup_nltk()
+
+    with st.spinner("Vertaalmodel voorbereiden (eenmalig)..."):
+        argos_ok, argos_fout = setup_argos()
+
+    if not argos_ok:
+        st.warning(f"Argos setup mislukt: {argos_fout}. Vertaling wordt overgeslagen.")
+        vertalen_aan = False
+    else:
+        vertalen_aan = True
 
     type_ = detecteer_type(url)
     st.write(f"**Gedetecteerd type:** `{type_}`")
@@ -285,15 +308,16 @@ if knop and url:
     with st.spinner("Samenvatting maken..."):
         samenvatting_en = " ".join(kernzinnen(transcript, 5))
 
-    # --- Alles in één request vertalen ---
-    # Bundel: 7 kernzinnen + 1 samenvatting = 8 teksten
-    alles_en = kz + [samenvatting_en]
-
-    with st.spinner("Vertalen..."):
-        alles_nl = vertaal_bundel(alles_en)
-
-    kz_nl = alles_nl[:len(kz)]
-    samenvatting_nl = alles_nl[-1] if len(alles_nl) > len(kz) else ""
+    # --- Vertalen (indien beschikbaar) ---
+    if vertalen_aan:
+        with st.spinner("Vertalen (offline)..."):
+            alles_en = kz + [samenvatting_en]
+            alles_nl = vertaal_bundel(alles_en)
+            kz_nl = alles_nl[:len(kz)]
+            samenvatting_nl = alles_nl[-1] if len(alles_nl) > len(kz) else ""
+    else:
+        kz_nl = ["[geen vertaling beschikbaar]"] * len(kz)
+        samenvatting_nl = "[geen vertaling beschikbaar]"
 
     # --- Kernzinnen tonen ---
     st.subheader("Kernzinnen")
