@@ -1,6 +1,6 @@
 # ============================================
 # YTnaarTxT — met kernwoorden, kernzinnen, samenvatting
-#                en Nederlandse vertaling
+#                en Nederlandse vertaling (batch)
 # ============================================
 
 import re
@@ -103,7 +103,7 @@ STOPWOORDEN = {
     "its", "im", "youre", "were", "theyre", "has", "had", "been",
     "being", "does", "did", "doing", "our", "your", "his", "her",
     "him", "she", "he", "we", "us", "me", "my", "mine", "yours",
-    # Discourse markers (nu echt filteren)
+    # Discourse markers
     "now", "well", "okay", "right", "yeah", "yes",
     "actually", "basically", "literally", "really", "quite",
     "still", "even", "ever", "never", "always", "often", "sometimes",
@@ -113,13 +113,15 @@ STOPWOORDEN = {
     "first", "second", "third", "next", "last", "finally",
     "another", "lot", "lots", "one", "two", "three",
     "four", "five", "six", "seven", "eight", "nine", "ten",
-    # Extra functiewoorden die vaak opduiken
-    "let", "lets", "say", "said", "says", "going", "go", "went",
+    # Extra functiewoorden
+    "let", "lets", "say", "said", "says", "go", "went",
     "way", "thing", "things", "time", "times", "day", "days",
     "year", "years", "month", "months", "week", "weeks",
     "guy", "guys", "people", "person", "man", "woman",
     "good", "bad", "big", "small", "new", "old", "long", "short",
-    "much", "little", "few", "every", "each", "both", "all", "any",
+    "little", "few", "every", "each", "both", "all", "any",
+    # Vulwoorden
+    "uh", "um", "er", "ah", "oh", "hmm", "mm", "eh",
 }
 
 
@@ -190,34 +192,19 @@ def kernzinnen(tekst: str, aantal: int = 5):
 
 
 # ============================================
-# DEEL 6 — Vertaling
+# DEEL 6 — Vertaling (batch)
 # ============================================
 
 @st.cache_data(show_spinner=False)
-def vertaal_naar_nederlands(tekst: str) -> str:
-    """Vertaal tekst naar het Nederlands via Google Translate."""
-    if not tekst.strip():
-        return ""
+def vertaal_batch(teksten: list[str]) -> list[str]:
+    """Vertaal een lijst teksten in één keer naar het Nederlands."""
+    if not teksten:
+        return []
     try:
-        # Google Translate limiet ~5000 tekens
-        if len(tekst) <= 4500:
-            return GoogleTranslator(source="en", target="nl").translate(tekst)
-        # Splits in stukken van maximaal 4500 tekens
-        stukken = []
-        huidig = ""
-        for zin in re.split(r"(?<=[.!?])\s+", tekst):
-            if len(huidig) + len(zin) + 2 > 4500:
-                if huidig:
-                    stukken.append(huidig)
-                huidig = zin
-            else:
-                huidig += " " + zin if huidig else zin
-        if huidig:
-            stukken.append(huidig)
-        vertaald = [GoogleTranslator(source="en", target="nl").translate(s) for s in stukken]
-        return " ".join(vertaald)
+        vertaler = GoogleTranslator(source="en", target="nl")
+        return vertaler.translate_batch(teksten)
     except Exception as e:
-        return f"[Vertaling mislukt: {e}]"
+        return [f"[Vertaling mislukt: {e}]"] * len(teksten)
 
 
 # ============================================
@@ -287,7 +274,7 @@ if knop and url:
         kz = kernzinnen(transcript, 7)
 
     with st.spinner("Kernzinnen vertalen..."):
-        kz_nl = [vertaal_naar_nederlands(z) for z in kz]
+        kz_nl = vertaal_batch(kz)
 
     for i, (en, nl) in enumerate(zip(kz, kz_nl), 1):
         with st.expander(f"Kernzin {i}"):
@@ -298,13 +285,14 @@ if knop and url:
 
     # --- Samenvatting ---
     st.subheader("Samenvatting")
-    st.caption("Extractieve samenvatting — letterlijke zinnen uit het transcript, in het Nederlands.")
+    st.caption("Extractieve samenvatting — de meest centrale zinnen, in het Nederlands.")
     with st.spinner("Samenvatting maken..."):
-        samenvatting_en = kernzinnen(transcript, 5)
+        samenvatting_en = " ".join(kernzinnen(transcript, 5))
+
     with st.spinner("Samenvatting vertalen..."):
-        samenvatting_nl = vertaal_naar_nederlands(" ".join(samenvatting_en))
+        samenvatting_nl = vertaal_batch([samenvatting_en])[0]
 
     st.write("**Nederlands:**")
     st.write(samenvatting_nl)
     with st.expander("Origineel (Engels)"):
-        st.write(" ".join(samenvatting_en))
+        st.write(samenvatting_en)
